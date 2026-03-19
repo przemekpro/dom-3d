@@ -26,12 +26,7 @@
   }
   #controls button:hover { background: rgba(60,60,60,0.9); color: #fff; }
   #controls button.active { background: rgba(80,120,180,0.7); color: #fff; border-color: #6a9fd8; }
-  .roof-tab {
-    background: rgba(0,0,0,0.7); color: #ccc; border: none;
-    padding: 10px 16px; cursor: pointer; font-size: 13px; transition: all 0.2s;
-  }
-  .roof-tab:hover { background: rgba(60,60,60,0.9); color: #fff; }
-  .roof-tab.active { background: rgba(180,120,40,0.8); color: #fff; }
+
 </style>
 </head>
 <body>
@@ -41,10 +36,6 @@
   Zoom: scroll<br>
   Przesuń: PPM / strzałki / WASD<br>
   Góra/dół: Q / E
-</div>
-<div id="roof-tabs" style="position:absolute;top:16px;right:16px;display:flex;gap:0;border-radius:8px;overflow:hidden;border:1px solid #555;">
-  <button onclick="switchRoof('daszek')" id="tab-daszek" class="roof-tab">A: Kalenica przy ścianie</button>
-  <button onclick="switchRoof('koperta')" id="tab-koperta" class="roof-tab active">B: Koperta po środku</button>
 </div>
 <div id="controls">
   <button onclick="viewSouth()" id="btn-s">Południe</button>
@@ -364,76 +355,43 @@ function clearExtRoof() {
   extRoofMeshes = [];
 }
 
-function buildExtRoof(variant) {
+function buildExtRoof() {
   clearExtRoof();
   const ov = 0.5;
   const eave = 4.1;
   const fb = 0.25;
 
-  if (variant === 'daszek') {
-    // WARIANT A: Kalenica przy ścianie domu, daszek od północy
-    const ridgeY = 4.8;
-    const x1 = -0.2 - ov, x2 = 6.7 + ov;
-    const z2 = 9.2 + ov;
-    const zN = 4.5 - 1.5;
-    const rx1 = -0.2 + 1.8, rx2 = 6.7 - 1.8;
+  // Koperta — kalenica po środku
+  const midZ = (4.5 + 9.2) / 2;
+  const ridgeY = 4.8;
+  const x1 = -0.2 - ov, x2 = 6.7 + ov;
+  const z1 = 4.5 - ov, z2 = 9.2 + ov;
+  const rx1 = -0.2 + 2.0, rx2 = 6.7 - 2.0;
 
-    const verts = [
-      x1, eave, z2, x2, eave, z2,
-      x2, eave, zN, x1, eave, zN,
-      rx1, ridgeY, 4.5, rx2, ridgeY, 4.5,
-    ];
-    const idx = [0,1,5, 0,5,4, 1,2,5, 2,3,4, 2,4,5, 3,0,4, 0,3,2, 0,2,1];
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-    geo.setIndex(idx);
-    geo.computeVertexNormals();
-    const m = new THREE.Mesh(geo, mat.dach);
-    m.castShadow = true; m.receiveShadow = true;
-    scene.add(m); extRoofMeshes.push(m);
+  const verts = [
+    x1, eave, z2, x2, eave, z2,
+    x2, eave, z1, x1, eave, z1,
+    rx1, ridgeY, midZ, rx2, ridgeY, midZ,
+  ];
+  const idx = [0,1,5, 0,5,4, 1,2,5, 2,3,4, 2,4,5, 3,0,4, 0,3,2, 0,2,1];
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const m = new THREE.Mesh(geo, mat.dach);
+  m.castShadow = true; m.receiveShadow = true;
+  scene.add(m); extRoofMeshes.push(m);
 
-    // Przybitki
-    [
-      [extW + ov*2, fb, 0.06, extCX, eave - fb/2, 9.2 + ov],
-      [extW + ov*2, fb, 0.06, extCX, eave - fb/2, zN],
-      [0.06, fb, extD + ov*2 + 1.5, 6.7 + ov, eave - fb/2, (zN + 9.2 + ov)/2],
-      [0.06, fb, extD + ov*2 + 1.5, -0.2 - ov, eave - fb/2, (zN + 9.2 + ov)/2],
-    ].forEach(p => { const b = box(p[0],p[1],p[2],mat.tynk,p[3],p[4],p[5]); extRoofMeshes.push(b); });
-
-  } else {
-    // WARIANT B: Kalenica po środku, pełna koperta
-    const midZ = (4.5 + 9.2) / 2;
-    const ridgeY = 4.8;
-    const x1 = -0.2 - ov, x2 = 6.7 + ov;
-    const z1 = 4.5 - ov, z2 = 9.2 + ov;
-    const rx1 = -0.2 + 2.0, rx2 = 6.7 - 2.0;
-
-    const verts = [
-      x1, eave, z2, x2, eave, z2,
-      x2, eave, z1, x1, eave, z1,
-      rx1, ridgeY, midZ, rx2, ridgeY, midZ,
-    ];
-    const idx = [0,1,5, 0,5,4, 1,2,5, 2,3,4, 2,4,5, 3,0,4, 0,3,2, 0,2,1];
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-    geo.setIndex(idx);
-    geo.computeVertexNormals();
-    const m = new THREE.Mesh(geo, mat.dach);
-    m.castShadow = true; m.receiveShadow = true;
-    scene.add(m); extRoofMeshes.push(m);
-
-    // Przybitki
-    [
-      [extW + ov*2, fb, 0.06, extCX, eave - fb/2, 9.2 + ov],
-      [extW + ov*2, fb, 0.06, extCX, eave - fb/2, 4.5 - ov],
-      [0.06, fb, extD + ov*2, 6.7 + ov, eave - fb/2, extCZ],
-      [0.06, fb, extD + ov*2, -0.2 - ov, eave - fb/2, extCZ],
-    ].forEach(p => { const b = box(p[0],p[1],p[2],mat.tynk,p[3],p[4],p[5]); extRoofMeshes.push(b); });
-  }
+  // Przybitki
+  [
+    [extW + ov*2, fb, 0.06, extCX, eave - fb/2, 9.2 + ov],
+    [extW + ov*2, fb, 0.06, extCX, eave - fb/2, 4.5 - ov],
+    [0.06, fb, extD + ov*2, 6.7 + ov, eave - fb/2, extCZ],
+    [0.06, fb, extD + ov*2, -0.2 - ov, eave - fb/2, extCZ],
+  ].forEach(p => { const b = box(p[0],p[1],p[2],mat.tynk,p[3],p[4],p[5]); extRoofMeshes.push(b); });
 }
 
-// Start with koperta variant (preferred)
-buildExtRoof('koperta');
+buildExtRoof();
 
 // ============== GANEK (ENTRANCE PORCH) ==============
 const gankX = -1.5;
@@ -1104,6 +1062,7 @@ renderer.domElement.addEventListener('wheel', (e) => {
 
 // Touch controls
 let touchDist = 0;
+let touchCenter = { x: 0, y: 0 };
 renderer.domElement.addEventListener('touchstart', (e) => {
   if (e.touches.length === 1) {
     isDragging = true;
@@ -1112,6 +1071,7 @@ renderer.domElement.addEventListener('touchstart', (e) => {
   if (e.touches.length === 2) {
     isDragging = false;
     touchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+    touchCenter = { x: (e.touches[0].clientX + e.touches[1].clientX) / 2, y: (e.touches[0].clientY + e.touches[1].clientY) / 2 };
   }
 });
 renderer.domElement.addEventListener('touchmove', (e) => {
@@ -1126,19 +1086,25 @@ renderer.domElement.addEventListener('touchmove', (e) => {
   }
   if (e.touches.length === 2) {
     const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+    const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+    const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+    const dx = cx - touchCenter.x;
+    const dy = cy - touchCenter.y;
+    // Zoom (pinch)
     spherical.r = Math.max(8, Math.min(100, spherical.r - (d - touchDist) * 0.05));
+    // Pan (2-finger drag)
+    const right = new THREE.Vector3();
+    const up = new THREE.Vector3(0, 1, 0);
+    camera.getWorldDirection(right);
+    right.cross(up).normalize();
+    target.addScaledVector(right, -dx * 0.02);
+    target.y += dy * 0.02;
     touchDist = d;
+    touchCenter = { x: cx, y: cy };
     updateCamera();
   }
 }, { passive: false });
 renderer.domElement.addEventListener('touchend', () => { isDragging = false; });
-
-// Roof variant switching
-function switchRoof(variant) {
-  document.querySelectorAll('.roof-tab').forEach(b => b.classList.remove('active'));
-  document.getElementById('tab-' + variant).classList.add('active');
-  buildExtRoof(variant);
-}
 
 // View presets
 function animateView(theta, phi, r, tx, ty, tz) {
