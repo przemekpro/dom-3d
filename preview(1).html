@@ -1,0 +1,1220 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Model 3D — Dom z dobudówką</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a1a; overflow: hidden; font-family: system-ui, sans-serif; }
+  canvas { display: block; }
+  #info {
+    position: absolute; top: 16px; left: 16px;
+    background: rgba(0,0,0,0.7); color: #ccc; padding: 12px 16px;
+    border-radius: 8px; font-size: 13px; line-height: 1.6;
+    pointer-events: none; max-width: 260px;
+  }
+  #info h3 { color: #fff; font-size: 15px; margin-bottom: 6px; font-weight: 500; }
+  #controls {
+    position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 8px;
+  }
+  #controls button {
+    background: rgba(0,0,0,0.7); color: #ccc; border: 1px solid #555;
+    padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;
+    transition: all 0.2s;
+  }
+  #controls button:hover { background: rgba(60,60,60,0.9); color: #fff; }
+  #controls button.active { background: rgba(80,120,180,0.7); color: #fff; border-color: #6a9fd8; }
+  .roof-tab {
+    background: rgba(0,0,0,0.7); color: #ccc; border: none;
+    padding: 10px 16px; cursor: pointer; font-size: 13px; transition: all 0.2s;
+  }
+  .roof-tab:hover { background: rgba(60,60,60,0.9); color: #fff; }
+  .roof-tab.active { background: rgba(180,120,40,0.8); color: #fff; }
+</style>
+</head>
+<body>
+<div id="info">
+  <h3>Dom z dobudówką — 3D</h3>
+  Obracaj: LPM + przeciągnij<br>
+  Zoom: scroll<br>
+  Przesuń: PPM / strzałki / WASD<br>
+  Góra/dół: Q / E
+</div>
+<div id="roof-tabs" style="position:absolute;top:16px;right:16px;display:flex;gap:0;border-radius:8px;overflow:hidden;border:1px solid #555;">
+  <button onclick="switchRoof('daszek')" id="tab-daszek" class="roof-tab">A: Kalenica przy ścianie</button>
+  <button onclick="switchRoof('koperta')" id="tab-koperta" class="roof-tab active">B: Koperta po środku</button>
+</div>
+<div id="controls">
+  <button onclick="viewSouth()" id="btn-s">Południe</button>
+  <button onclick="viewEast()" id="btn-e">Wschód</button>
+  <button onclick="viewNorth()" id="btn-n">Północ</button>
+  <button onclick="viewWest()" id="btn-w">Zachód</button>
+  <button onclick="viewTop()" id="btn-t">Z góry</button>
+  <button onclick="viewIso()" id="btn-i" class="active">Perspektywa</button>
+  <button onclick="viewPlot()" id="btn-p">Działka</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xd4dde6);
+
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 200);
+camera.position.set(22, 16, 22);
+camera.lookAt(0, 3, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+// Lights
+const ambient = new THREE.AmbientLight(0xffffff, 0.5);
+scene.add(ambient);
+
+const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+sun.position.set(15, 20, 10);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -60;
+sun.shadow.camera.right = 60;
+sun.shadow.camera.top = 60;
+sun.shadow.camera.bottom = -60;
+scene.add(sun);
+
+const fill = new THREE.DirectionalLight(0x8899bb, 0.3);
+fill.position.set(-10, 10, -10);
+scene.add(fill);
+
+// Materials
+const mat = {
+  tynk: new THREE.MeshLambertMaterial({ color: 0xede8db }),
+  drewno: new THREE.MeshLambertMaterial({ color: 0xc9a86c, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }),
+  dach: new THREE.MeshLambertMaterial({ color: 0x4a4845, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }),
+  fundament: new THREE.MeshLambertMaterial({ color: 0x8a8578 }),
+  okno: new THREE.MeshLambertMaterial({ color: 0x7aaed4, transparent: true, opacity: 0.6 }),
+  rama: new THREE.MeshLambertMaterial({ color: 0x4a4a4a }),
+  drzwi: new THREE.MeshLambertMaterial({ color: 0x5a5550 }),
+  taras: new THREE.MeshLambertMaterial({ color: 0xb5b0a5 }),
+  accent: new THREE.MeshLambertMaterial({ color: 0x4a5060, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }),
+  trawa: new THREE.MeshLambertMaterial({ color: 0x6b8c42 }),
+  chodnik: new THREE.MeshLambertMaterial({ color: 0xb0a898 }),
+  schody: new THREE.MeshLambertMaterial({ color: 0x9a9590 }),
+};
+
+// Coordinate system: X = East, Z = South, Y = Up
+// House center at origin, north wall at z=-4.5, south wall at z=4.5
+// East wall at x=4.5, west wall at x=-4.5
+
+function box(w, h, d, material, x, y, z) {
+  const g = new THREE.BoxGeometry(w, h, d);
+  const m = new THREE.Mesh(g, material);
+  m.position.set(x, y, z);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  scene.add(m);
+  return m;
+}
+
+// Ground — full plot size
+const groundGeo = new THREE.PlaneGeometry(100, 100);
+const ground = new THREE.Mesh(groundGeo, mat.trawa);
+ground.rotation.x = -Math.PI/2;
+ground.position.set(-1, -0.01, 11);
+ground.receiveShadow = true;
+scene.add(ground);
+
+// ============== FOUNDATION (1.3m) ==============
+box(9, 1.3, 9, mat.fundament, 0, 0.65, 0);
+
+// ============== GROUND FLOOR WALLS (2.8m, from y=1.3 to y=4.1) ==============
+// Tynk base
+box(9, 2.8, 9, mat.tynk, 0, 1.3 + 1.4, 0);
+
+// Wood cladding band on GF — offset 0.1 from wall to avoid z-fighting
+box(9.1, 1.5, 0.1, mat.drewno, 0, 2.8, -4.56); // north
+// South — split around balcony doors (doors at x=-1.75 to x=-0.25)
+box(2.5, 1.5, 0.1, mat.drewno, -3.25, 2.8, 4.56);  // south left (x=-4.5 to -2.0)
+box(4.2, 1.5, 0.1, mat.drewno, 2.4, 2.8, 4.56);    // south right (x=0.3 to 4.5)
+box(0.1, 1.5, 9.1, mat.drewno, 4.56, 2.8, 0);   // east
+box(0.1, 1.5, 9.1, mat.drewno, -4.56, 2.8, 0);  // west
+
+// ============== FIRST FLOOR WALLS (2.7m, from y=4.1 to y=6.8) ==============
+box(9, 2.7, 9, mat.tynk, 0, 4.1 + 1.35, 0);
+
+// Wood band 1F
+box(9.1, 0.4, 0.1, mat.drewno, 0, 4.4, -4.56);
+box(9.1, 0.4, 0.1, mat.drewno, 0, 4.4, 4.56);
+box(0.1, 0.4, 9.1, mat.drewno, 4.56, 4.4, 0);
+box(0.1, 0.4, 9.1, mat.drewno, -4.56, 4.4, 0);
+
+// ============== WINDOWS ==============
+function addWindow(x, y, z, w, h, rotY) {
+  const frame = box(w+0.1, h+0.1, 0.15, mat.rama, x, y, z);
+  frame.rotation.y = rotY || 0;
+  const glass = box(w-0.05, h-0.05, 0.08, mat.okno, x, y, z);
+  glass.rotation.y = rotY || 0;
+}
+
+// North wall — narrow window at ganek level (near ganek)
+addWindow(-1.5, 2.8, -4.58, 0.6, 1.5, 0);
+// North wall — 1F tall window above ganek
+addWindow(-1.5, 5.4, -4.58, 0.8, 1.5, 0);
+// North wall — windows at right (west) corner, GF and 1F
+addWindow(-3.5, 2.7, -4.58, 1.8, 1.3, 0);   // GF
+addWindow(-3.5, 5.4, -4.58, 1.8, 1.5, 0);   // 1F
+
+// South wall GF — double window + double balcony doors onto terrace
+addWindow(-3.2, 2.7, 4.58, 1.6, 1.2, 0);  // double window (left)
+// Double doors from south wall onto terrace (flush/closed)
+box(1.5, 2.2, 0.1, mat.rama, -1.0, 1.3 + 1.1, 4.52);      // frame flush in wall
+box(0.63, 2.1, 0.06, mat.okno, -1.35, 1.3 + 1.05, 4.52);   // left door
+box(0.63, 2.1, 0.06, mat.okno, -0.65, 1.3 + 1.05, 4.52);   // right door
+box(0.04, 2.2, 0.1, mat.rama, -1.0, 1.3 + 1.1, 4.52);      // center mullion
+
+// Extension west wall — double balcony doors onto terrace (flush/closed)
+box(0.1, 2.2, 1.5, mat.rama, -0.22, 1.3 + 1.1, 5.8);       // frame flush in wall
+box(0.06, 2.1, 0.63, mat.okno, -0.22, 1.3 + 1.05, 5.45);   // north door
+box(0.06, 2.1, 0.63, mat.okno, -0.22, 1.3 + 1.05, 6.15);   // south door
+box(0.1, 2.2, 0.04, mat.rama, -0.22, 1.3 + 1.1, 5.8);      // center mullion
+
+// Extension north face — no window
+
+// East wall GF — centered tall window (same height as 1F)
+addWindow(4.58, 2.8, 0, 0.8, 1.5, Math.PI/2);
+// East wall — staircase window at half house height (spans GF/1F boundary)
+addWindow(4.58, 4.1, -3.0, 0.7, 2.4, Math.PI/2);
+// East wall — windows on south side, matching south wall window heights
+addWindow(4.58, 2.7, 3.0, 0.8, 1.5, Math.PI/2);   // GF, 1.5m
+addWindow(4.58, 5.4, 3.0, 0.8, 1.5, Math.PI/2);   // 1F, same as south 1F (1.5m)
+
+// West wall GF windows — vertically aligned with 1F
+addWindow(-4.58, 2.7, -1.5, 1.8, 1.3, Math.PI/2);
+addWindow(-4.58, 2.7, 3.0, 1.8, 1.3, Math.PI/2);
+
+// North wall 1F — already added above
+
+// South wall 1F — empty
+
+// West wall 1F windows — vertically aligned with GF
+addWindow(-4.58, 5.4, -1.5, 1.8, 1.5, Math.PI/2);
+
+// SW corner window 1F — wraps around corner (wider)
+addWindow(-4.58, 5.4, 4.0, 1.4, 1.5, Math.PI/2);  // west face
+addWindow(-3.8, 5.4, 4.58, 1.4, 1.5, 0);            // south face
+
+// South wall 1F — window above extension area
+addWindow(2.0, 5.4, 4.58, 1.4, 1.5, 0);
+
+// East wall 1F — directly above GF tall window
+addWindow(4.58, 5.4, 0, 0.8, 1.5, Math.PI/2);
+
+// ============== MAIN HIP ROOF ==============
+function createHipRoof(cx, cy, cz, w, d, roofH, overhang) {
+  const hw = w/2 + overhang;
+  const hd = d/2 + overhang;
+  const ridgeLen = (w - d) / 2;
+  const rw = w/2 - d/2;
+
+  const shape = new THREE.Shape();
+  // Front-right, going clockwise from top
+  const vertices = [
+    // bottom rectangle (eave level)
+    new THREE.Vector3(-hw, 0, -hd),
+    new THREE.Vector3(hw, 0, -hd),
+    new THREE.Vector3(hw, 0, hd),
+    new THREE.Vector3(-hw, 0, hd),
+    // ridge
+    new THREE.Vector3(-rw, roofH, 0),
+    new THREE.Vector3(rw, roofH, 0),
+  ];
+
+  const geo = new THREE.BufferGeometry();
+  // 8 triangles for hip roof
+  const indices = [
+    // North slope
+    0, 1, 5, 0, 5, 4,
+    // East slope
+    1, 2, 5,
+    // South slope
+    2, 3, 4, 2, 4, 5,
+    // West slope
+    3, 0, 4,
+    // Bottom (optional)
+    0, 3, 2, 0, 2, 1,
+  ];
+
+  const positions = [];
+  vertices.forEach(v => positions.push(v.x, v.y, v.z));
+
+  geo.setIndex(indices);
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.computeVertexNormals();
+
+  const mesh = new THREE.Mesh(geo, mat.dach);
+  mesh.position.set(cx, cy, cz);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+  return mesh;
+}
+
+// Main house roof at y=6.8, hip roof with 3.2m flat ridge running E-W
+{
+  const ov = 0.5;
+  const roofBase = 6.82;
+  const roofH = 1.3;
+  const hw = 9/2 + ov; // half width + overhang
+  const hd = 9/2 + ov;
+  const ridgeHalf = 3.2 / 2; // 1.6m each side of center
+
+  const verts = [
+    -hw, roofBase, -hd,           // 0: NW eave
+     hw, roofBase, -hd,           // 1: NE eave
+     hw, roofBase,  hd,           // 2: SE eave
+    -hw, roofBase,  hd,           // 3: SW eave
+    -ridgeHalf, roofBase+roofH, 0, // 4: W ridge
+     ridgeHalf, roofBase+roofH, 0, // 5: E ridge
+  ];
+
+  const idx = [
+    // North slope
+    0, 1, 5, 0, 5, 4,
+    // East hip
+    1, 2, 5,
+    // South slope
+    2, 3, 4, 2, 4, 5,
+    // West hip
+    3, 0, 4,
+    // Bottom
+    0, 3, 2, 0, 2, 1,
+  ];
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, mat.dach);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+
+  // PRZYBITKA (fascia) — main house roof
+  const fb = 0.3;
+  const fo = 0.5;
+  box(9 + fo*2, fb, 0.1, mat.tynk, 0, 6.82 - fb/2, -(9/2 + fo));
+  box(9 + fo*2, fb, 0.1, mat.tynk, 0, 6.82 - fb/2, 9/2 + fo);
+  box(0.1, fb, 9 + fo*2, mat.tynk, 9/2 + fo, 6.82 - fb/2, 0);
+  box(0.1, fb, 9 + fo*2, mat.tynk, -(9/2 + fo), 6.82 - fb/2, 0);
+}
+// Extension: 6.9m E-W (x), 4.7m N-S (z)
+// Sticks out 2.2m east: east edge x=4.5+2.2=6.7, west edge x=6.7-6.9=-0.2
+// South edge z=4.5+4.7=9.2
+
+// Extension: 6.9m E-W (x), 4.7m N-S (z)
+// Sticks out 2.2m east: east edge x=4.5+2.2=6.7, west edge x=6.7-6.9=-0.2
+// South edge z=4.5+4.7=9.2
+const extCX = (-0.2 + 6.7) / 2; // 3.25
+const extCZ = (4.5 + 9.2) / 2; // 6.85
+const extW = 6.9;
+const extD = 4.7;
+
+// Extension foundation
+box(extW, 1.3, extD, mat.fundament, extCX, 0.65, extCZ);
+
+// Extension GF walls
+box(extW, 2.8, extD, mat.tynk, extCX, 1.3 + 1.4, extCZ);
+
+// Extension wood cladding — 0.1 offset to avoid z-fighting
+box(extW + 0.1, 1.5, 0.1, mat.drewno, extCX, 2.8, 4.5 + 0.06); // north face (against house - mostly hidden)
+box(extW + 0.1, 1.5, 0.1, mat.drewno, extCX, 2.8, 9.2 + 0.06); // south face
+box(0.1, 1.5, extD + 0.1, mat.drewno, 6.7 + 0.06, 2.8, extCZ);  // east face
+// West face — split around balcony doors (doors at z=5.05..6.55)
+box(0.1, 1.5, 0.5, mat.drewno, -0.2 - 0.06, 2.8, 4.75);   // north of doors
+box(0.1, 1.5, 2.5, mat.drewno, -0.2 - 0.06, 2.8, 7.95);   // south of doors
+// North face visible overhang part (x=4.5 to x=6.7, z=4.5)
+box(2.2 + 0.1, 1.5, 0.1, mat.drewno, 4.5 + 1.15, 2.8, 4.5 - 0.06);
+// Tynk above/below wood on visible north overhang
+box(2.2 + 0.1, 2.8, 0.08, mat.tynk, 4.5 + 1.15, 1.3 + 1.4, 4.5 - 0.06);
+
+// Dark accent strips
+box(extW + 0.12, 0.12, 0.1, mat.accent, extCX, 4.1, 9.2 + 0.06);
+box(extW + 0.12, 0.12, 0.1, mat.accent, extCX, 1.32, 9.2 + 0.06);
+box(0.1, 0.12, extD + 0.1, mat.accent, 6.7 + 0.06, 4.1, extCZ);
+box(0.1, 0.12, extD + 0.1, mat.accent, 6.7 + 0.06, 1.32, extCZ);
+
+// Extension windows — south face
+addWindow(extCX - 1.5, 2.8, 9.24, 1.3, 1.3, 0);
+addWindow(extCX + 1.5, 2.8, 9.24, 1.3, 1.3, 0);
+// Extension windows — east face
+addWindow(6.74, 2.8, extCZ - 0.8, 1.2, 1.2, Math.PI/2);
+addWindow(6.74, 2.8, extCZ + 0.8, 1.2, 1.2, Math.PI/2);
+// Extension window — west face (south end, away from doors)
+addWindow(-0.24, 2.8, 8.2, 1.2, 1.2, Math.PI/2);
+
+// Extension roof — switchable between two variants
+let extRoofMeshes = [];
+
+function clearExtRoof() {
+  extRoofMeshes.forEach(m => scene.remove(m));
+  extRoofMeshes = [];
+}
+
+function buildExtRoof(variant) {
+  clearExtRoof();
+  const ov = 0.5;
+  const eave = 4.1;
+  const fb = 0.25;
+
+  if (variant === 'daszek') {
+    // WARIANT A: Kalenica przy ścianie domu, daszek od północy
+    const ridgeY = 4.8;
+    const x1 = -0.2 - ov, x2 = 6.7 + ov;
+    const z2 = 9.2 + ov;
+    const zN = 4.5 - 1.5;
+    const rx1 = -0.2 + 1.8, rx2 = 6.7 - 1.8;
+
+    const verts = [
+      x1, eave, z2, x2, eave, z2,
+      x2, eave, zN, x1, eave, zN,
+      rx1, ridgeY, 4.5, rx2, ridgeY, 4.5,
+    ];
+    const idx = [0,1,5, 0,5,4, 1,2,5, 2,3,4, 2,4,5, 3,0,4, 0,3,2, 0,2,1];
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    const m = new THREE.Mesh(geo, mat.dach);
+    m.castShadow = true; m.receiveShadow = true;
+    scene.add(m); extRoofMeshes.push(m);
+
+    // Przybitki
+    [
+      [extW + ov*2, fb, 0.06, extCX, eave - fb/2, 9.2 + ov],
+      [extW + ov*2, fb, 0.06, extCX, eave - fb/2, zN],
+      [0.06, fb, extD + ov*2 + 1.5, 6.7 + ov, eave - fb/2, (zN + 9.2 + ov)/2],
+      [0.06, fb, extD + ov*2 + 1.5, -0.2 - ov, eave - fb/2, (zN + 9.2 + ov)/2],
+    ].forEach(p => { const b = box(p[0],p[1],p[2],mat.tynk,p[3],p[4],p[5]); extRoofMeshes.push(b); });
+
+  } else {
+    // WARIANT B: Kalenica po środku, pełna koperta
+    const midZ = (4.5 + 9.2) / 2;
+    const ridgeY = 4.8;
+    const x1 = -0.2 - ov, x2 = 6.7 + ov;
+    const z1 = 4.5 - ov, z2 = 9.2 + ov;
+    const rx1 = -0.2 + 2.0, rx2 = 6.7 - 2.0;
+
+    const verts = [
+      x1, eave, z2, x2, eave, z2,
+      x2, eave, z1, x1, eave, z1,
+      rx1, ridgeY, midZ, rx2, ridgeY, midZ,
+    ];
+    const idx = [0,1,5, 0,5,4, 1,2,5, 2,3,4, 2,4,5, 3,0,4, 0,3,2, 0,2,1];
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    const m = new THREE.Mesh(geo, mat.dach);
+    m.castShadow = true; m.receiveShadow = true;
+    scene.add(m); extRoofMeshes.push(m);
+
+    // Przybitki
+    [
+      [extW + ov*2, fb, 0.06, extCX, eave - fb/2, 9.2 + ov],
+      [extW + ov*2, fb, 0.06, extCX, eave - fb/2, 4.5 - ov],
+      [0.06, fb, extD + ov*2, 6.7 + ov, eave - fb/2, extCZ],
+      [0.06, fb, extD + ov*2, -0.2 - ov, eave - fb/2, extCZ],
+    ].forEach(p => { const b = box(p[0],p[1],p[2],mat.tynk,p[3],p[4],p[5]); extRoofMeshes.push(b); });
+  }
+}
+
+// Start with koperta variant (preferred)
+buildExtRoof('koperta');
+
+// ============== GANEK (ENTRANCE PORCH) ==============
+const gankX = -1.5;
+const gankW = 2.5;
+const gankD = 1.5;
+const gankCZ = -4.5 - gankD/2;
+
+// Foundation
+box(gankW, 1.3, gankD, mat.fundament, gankX, 0.65, gankCZ);
+
+// Walls (slightly narrower so cladding sits on top without z-fight)
+box(gankW - 0.02, 2.8, gankD - 0.02, mat.tynk, gankX, 1.3 + 1.4, gankCZ);
+
+// Wood cladding — sits clearly outside walls
+box(gankW + 0.1, 1.5, 0.12, mat.drewno, gankX, 2.8, -4.5 - gankD - 0.06); // north face
+box(0.12, 1.5, gankD + 0.1, mat.drewno, gankX - gankW/2 - 0.06, 2.8, gankCZ); // west face
+box(0.12, 1.5, gankD + 0.1, mat.drewno, gankX + gankW/2 + 0.06, 2.8, gankCZ); // east face
+
+// 3-sided hip roof — south edge buried deep inside house body to avoid z-fight
+{
+  const ov = 0.4;
+  const eave = 4.15;
+  const ridgeY = 4.6;
+  const zNorth = -4.5 - gankD - ov;
+  const zSouth = -4.0; // 0.5m INSIDE house body — completely hidden
+  const x1 = gankX - gankW/2 - ov;
+  const x2 = gankX + gankW/2 + ov;
+  const rx1 = gankX - gankW/2 + 0.7;
+  const rx2 = gankX + gankW/2 - 0.7;
+
+  const verts = [
+    x1, eave, zNorth,       // 0: NW eave
+    x2, eave, zNorth,       // 1: NE eave
+    x2, eave, zSouth,       // 2: SE deep inside house
+    x1, eave, zSouth,       // 3: SW deep inside house
+    rx1, ridgeY, zSouth,    // 4: W ridge inside house
+    rx2, ridgeY, zSouth,    // 5: E ridge inside house
+  ];
+  const idx = [
+    0, 1, 5, 0, 5, 4,  // north slope (main visible)
+    1, 2, 5,            // east hip
+    3, 0, 4,            // west hip
+    0, 3, 2, 0, 2, 1,  // bottom
+  ];
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const m = new THREE.Mesh(geo, mat.dach);
+  m.castShadow = true; m.receiveShadow = true;
+  scene.add(m);
+
+  // Przybitka — north, east, west
+  const fb = 0.22;
+  box(gankW + ov*2, fb, 0.1, mat.tynk, gankX, eave - fb/2, zNorth);
+  box(0.1, fb, gankD + ov, mat.tynk, x1, eave - fb/2, -4.5 - gankD/2 - ov/2);
+  box(0.1, fb, gankD + ov, mat.tynk, x2, eave - fb/2, -4.5 - gankD/2 - ov/2);
+}
+
+// Door on east wall
+box(0.15, 2.1, 1.0, mat.drzwi, gankX + gankW/2 + 0.1, 1.3 + 1.1, gankCZ);
+
+// Stairs going east, full ganek width, 9 steps
+{
+  const stairD = 0.28;
+  const stairH = 1.3 / 9;
+  const stairsStartX = gankX + gankW/2 + 0.12;
+  const stairsLen = 9 * stairD;
+
+  for (let i = 0; i < 9; i++) {
+    const sx = stairsStartX + i * stairD + stairD/2;
+    box(stairD - 0.02, stairH * (9 - i), gankW, mat.schody, sx, stairH * (9 - i) / 2, gankCZ);
+  }
+
+  // Glass railings following stair slope
+  const glassM = new THREE.MeshLambertMaterial({ color: 0xaaccdd, transparent: true, opacity: 0.3 });
+  const railMat = new THREE.MeshLambertMaterial({ color: 0x555555 });
+  const railH = 0.9;
+
+  for (let side = -1; side <= 1; side += 2) {
+    const sz = gankCZ + side * (gankW/2 - 0.02);
+
+    // Glass panel — trapezoid following stairs
+    const gv = [
+      stairsStartX + stairsLen, 0,            sz,
+      stairsStartX + stairsLen, railH,         sz,
+      stairsStartX,             1.3 + railH,   sz,
+      stairsStartX,             1.3,           sz,
+    ];
+    const gi = [0, 1, 2, 0, 2, 3, 3, 2, 1, 3, 1, 0];
+    const gg = new THREE.BufferGeometry();
+    gg.setAttribute('position', new THREE.Float32BufferAttribute(gv, 3));
+    gg.setIndex(gi);
+    gg.computeVertexNormals();
+    scene.add(new THREE.Mesh(gg, glassM));
+
+    // Handrail — segmented boxes
+    const segs = 10;
+    for (let s = 0; s < segs; s++) {
+      const t1 = s / segs, t2 = (s + 1) / segs;
+      const xa = stairsStartX + stairsLen * (1 - t1);
+      const xb = stairsStartX + stairsLen * (1 - t2);
+      const ya = t1 * 1.3 + railH;
+      const yb = t2 * 1.3 + railH;
+      const sLen = Math.sqrt((xb-xa)**2 + (yb-ya)**2);
+      const sAng = Math.atan2(yb - ya, xb - xa);
+      const rg = new THREE.BoxGeometry(sLen, 0.035, 0.035);
+      const rm = new THREE.Mesh(rg, railMat);
+      rm.position.set((xa+xb)/2, (ya+yb)/2, sz);
+      rm.rotation.z = sAng;
+      scene.add(rm);
+    }
+
+    // Posts
+    box(0.035, railH, 0.035, railMat, stairsStartX + stairsLen, railH/2, sz);
+    box(0.035, railH, 0.035, railMat, stairsStartX, 1.3 + railH/2, sz);
+    box(0.035, railH * 0.7, 0.035, railMat, stairsStartX + stairsLen/2, 0.65 + railH * 0.35, sz);
+  }
+}
+
+// ============== TERRACE ==============
+// Terrace: 4.5m E-W (x=-4.5..0.0), 2.3m N-S (z=4.5..6.8), at y=1.3
+const tarasX = (-4.5 + 0) / 2; // -2.25
+const tarasZ = (4.5 + 6.8) / 2; // 5.65
+
+// Foundation under terrace
+box(4.5, 1.3, 2.3, mat.fundament, tarasX, 0.65, tarasZ);
+
+// Terrace slab
+box(4.5, 0.15, 2.3, mat.taras, tarasX, 1.3, tarasZ);
+
+// Glass railings
+{
+  const glassM = new THREE.MeshLambertMaterial({ color: 0xaaccdd, transparent: true, opacity: 0.3 });
+  const railMat = new THREE.MeshLambertMaterial({ color: 0x555555 });
+  const railH = 0.9;
+  const railY = 1.3 + railH/2;
+  const topY = 1.3 + railH;
+
+  // WEST railing (x=-4.5, full length z=4.5..6.8)
+  box(0.03, railH, 2.3, glassM, -4.52, railY, tarasZ);
+  box(0.035, 0.035, 2.3, railMat, -4.52, topY, tarasZ);
+  // Posts
+  box(0.035, railH, 0.035, railMat, -4.52, railY, 4.5);
+  box(0.035, railH, 0.035, railMat, -4.52, railY, 6.8);
+
+  // SOUTH railing (z=6.8) — gap for stairs on east end
+  // Stairs are centered at x=-1.35, width 2.3m (x=-2.5..x=-0.2)
+  // So south railing from x=-4.5 to x=-2.5 only
+  const southRailLen = 2.0; // from -4.5 to -2.5
+  const southRailCX = -4.5 + southRailLen/2; // -3.5
+  box(southRailLen, railH, 0.03, glassM, southRailCX, railY, 6.82);
+  box(southRailLen, 0.035, 0.035, railMat, southRailCX, topY, 6.82);
+  // Posts
+  box(0.035, railH, 0.035, railMat, -4.5, railY, 6.82);
+  box(0.035, railH, 0.035, railMat, -2.5, railY, 6.82);
+
+  // EAST side — no railing (next to extension wall)
+  // Corner post SW
+  box(0.035, railH, 0.035, railMat, -4.52, railY, 4.5);
+}
+
+// Terrace stairs (along extension west wall at x=-0.2, 9 steps)
+{
+  const stairH = 1.3 / 9;
+  for (let i = 0; i < 9; i++) {
+    const sz = 4.5 + 2.3 + 0.05 + i * 0.28;
+    const sh = stairH * (9 - i);
+    box(2.3, sh, 0.26, mat.schody, -0.2 - 1.15, sh/2, sz);
+  }
+}
+
+// ============== PLOT LAYOUT ==============
+// Plot: 45m N-S (Z) x 30m E-W (X)
+// Wider side (45m) along western wall of house
+// Cottage: 10x5m, rotated, at north boundary, 3.3m from west fence
+// Cottage east wall aligns with house west wall (x=-4.5)
+// 1.7m passage between cottage and house
+{
+  // Boundaries calculated from cottage/house positions:
+  // Cottage east wall x=-4.5, 10m wide → west wall x=-14.5, +3.3m → west fence x=-17.8
+  // East fence x=-17.8+30=12.2
+  // Cottage south wall z=-6.2, 5m deep → north wall z=-11.2 = north fence
+  // South fence z=-11.2+45=33.8
+  const plotN = -11.2, plotS = 33.8, plotW = -17.8, plotE = 15.5;
+  const plotCX = (plotW + plotE) / 2;
+  const plotCZ = (plotN + plotS) / 2;
+
+  // Street surface (west of plot)
+  box(6, 0.05, 50, mat.chodnik, plotW - 3, -0.01, plotCZ);
+
+  // Fence
+  const fenceMat = new THREE.MeshLambertMaterial({ color: 0x666666 });
+  const fenceH = 1.6;
+  const fencePostH = 1.8;
+
+  // North fence
+  box(plotE - plotW, fenceH, 0.08, fenceMat, plotCX, fenceH/2, plotN);
+  // South fence
+  box(plotE - plotW, fenceH, 0.08, fenceMat, plotCX, fenceH/2, plotS);
+  // East fence
+  box(0.08, fenceH, plotS - plotN, fenceMat, plotE, fenceH/2, plotCZ);
+  // West fence (with gap for gate)
+  const gateZ = 10;
+  box(0.08, fenceH, gateZ - plotN - 3, fenceMat, plotW, fenceH/2, plotN + (gateZ - plotN - 3)/2);
+  box(0.08, fenceH, plotS - gateZ - 3, fenceMat, plotW, fenceH/2, gateZ + 3 + (plotS - gateZ - 3)/2);
+
+  // Fence posts
+  for (let i = 0; i <= 15; i++) {
+    const z = plotN + i * 3;
+    if (z < plotS) {
+      box(0.08, fencePostH, 0.08, fenceMat, plotE, fencePostH/2, z);
+      if (z < gateZ - 2 || z > gateZ + 3) box(0.08, fencePostH, 0.08, fenceMat, plotW, fencePostH/2, z);
+    }
+  }
+  for (let i = 0; i <= 10; i++) {
+    const x = plotW + i * 3;
+    box(0.08, fencePostH, 0.08, fenceMat, x, fencePostH/2, plotN);
+    box(0.08, fencePostH, 0.08, fenceMat, x, fencePostH/2, plotS);
+  }
+
+  // Gate + wicket
+  box(0.1, 1.4, 3.0, fenceMat, plotW, 0.7, gateZ + 0.5);
+  box(0.1, 1.4, 1.0, fenceMat, plotW, 0.7, gateZ - 2.0);
+  // Gate pillars
+  box(0.3, 2.0, 0.3, mat.fundament, plotW, 1.0, gateZ - 2.6);
+  box(0.3, 2.0, 0.3, mat.fundament, plotW, 1.0, gateZ + 2.1);
+  box(0.3, 2.0, 0.3, mat.fundament, plotW, 1.0, gateZ - 1.4);
+
+  // ============== DRIVEWAY ==============
+  const driveMat = new THREE.MeshLambertMaterial({ color: 0x999590 });
+  // From gate toward house
+  box(5, 0.05, 3.5, driveMat, plotW + 2.5, 0.02, gateZ + 0.5);
+  // Along toward garage
+  box(3.5, 0.05, 20, driveMat, -12, 0.02, 18);
+  // Across to garage (wider to reach new position)
+  box(24, 0.05, 3.5, driveMat, 2, 0.02, 13.8);
+
+  // Walkway from wicket to house entrance
+  box(1.2, 0.05, 14, driveMat, plotW + 3, 0.02, 2);
+  box(10, 0.05, 1.2, driveMat, -10, 0.02, -5.5);
+
+  // ============== GUEST COTTAGE (10x5m) ==============
+  {
+    const cW = 10, cD = 5;
+    const cX = -9.5, cZ = -8.7;
+    const cBase = 0.6;
+    const wallH = 3.1;
+    const cTop = cBase + wallH; // 3.7
+
+    box(cW, cBase, cD, mat.fundament, cX, cBase/2, cZ);
+    box(cW, wallH, cD, mat.tynk, cX, cBase + wallH/2, cZ);
+
+    // South wall — windows + door
+    addWindow(cX - 3, 2.0, cZ + cD/2 + 0.08, 1.2, 1.0, 0);
+    addWindow(cX - 0.5, 2.0, cZ + cD/2 + 0.08, 1.0, 0.8, 0);
+    addWindow(cX + 2.5, 2.0, cZ + cD/2 + 0.08, 1.0, 0.8, 0);
+    box(0.9, 2.0, 0.12, mat.drzwi, cX + 4, cBase + 1.0, cZ + cD/2 + 0.08);
+    // East gable — small window
+    addWindow(cX + cW/2 + 0.08, 2.2, cZ - 0.5, 0.7, 0.7, Math.PI/2);
+
+    // Roof — raised front (south) edge significantly so attic windows visible
+    const roofHigh = cTop + 1.5; // 5.2 north
+    const roofLow = cTop + 0.7;  // 4.4 south (raised from 0.3)
+    {
+      const ov = 0.4;
+      const x1 = cX - cW/2 - ov, x2 = cX + cW/2 + ov;
+      const z1 = cZ - cD/2 - ov, z2 = cZ + cD/2 + ov;
+      const thick = 0.15;
+      const verts = [
+        x1, roofLow, z2, x2, roofLow, z2,
+        x2, roofHigh, z1, x1, roofHigh, z1,
+        x1, roofLow - thick, z2, x2, roofLow - thick, z2,
+        x2, roofHigh - thick, z1, x1, roofHigh - thick, z1,
+      ];
+      const idx = [0,1,2, 0,2,3, 4,6,5, 4,7,6, 0,4,5, 0,5,1, 2,6,7, 2,7,3, 1,5,6, 1,6,2, 0,3,7, 0,7,4];
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+      geo.setIndex(idx); geo.computeVertexNormals();
+      const m = new THREE.Mesh(geo, mat.dach);
+      m.castShadow = true; m.receiveShadow = true;
+      scene.add(m);
+    }
+    // East gable fill
+    {
+      const v = [cX+cW/2+0.01, cTop, cZ-cD/2, cX+cW/2+0.01, cTop, cZ+cD/2,
+        cX+cW/2+0.01, roofHigh-0.15, cZ-cD/2, cX+cW/2+0.01, roofLow-0.15, cZ+cD/2];
+      const i = [0,1,3, 0,3,2, 2,3,1, 2,1,0];
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3)); g.setIndex(i); g.computeVertexNormals();
+      scene.add(new THREE.Mesh(g, mat.tynk));
+    }
+    // West gable fill
+    {
+      const v = [cX-cW/2-0.01, cTop, cZ-cD/2, cX-cW/2-0.01, cTop, cZ+cD/2,
+        cX-cW/2-0.01, roofHigh-0.15, cZ-cD/2, cX-cW/2-0.01, roofLow-0.15, cZ+cD/2];
+      const i = [0,3,1, 0,2,3, 2,1,3, 2,0,1];
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3)); g.setIndex(i); g.computeVertexNormals();
+      scene.add(new THREE.Mesh(g, mat.tynk));
+    }
+    // North wall fill
+    {
+      const v = [cX-cW/2, cTop, cZ-cD/2-0.01, cX+cW/2, cTop, cZ-cD/2-0.01,
+        cX+cW/2, roofHigh-0.15, cZ-cD/2-0.01, cX-cW/2, roofHigh-0.15, cZ-cD/2-0.01];
+      const i = [0,1,2, 0,2,3, 3,2,1, 3,1,0];
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3)); g.setIndex(i); g.computeVertexNormals();
+      scene.add(new THREE.Mesh(g, mat.tynk));
+    }
+    // South wall fill
+    {
+      const v = [cX-cW/2, cTop, cZ+cD/2+0.01, cX+cW/2, cTop, cZ+cD/2+0.01,
+        cX+cW/2, roofLow-0.15, cZ+cD/2+0.01, cX-cW/2, roofLow-0.15, cZ+cD/2+0.01];
+      const i = [0,2,1, 0,3,2, 3,1,2, 3,0,1];
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3)); g.setIndex(i); g.computeVertexNormals();
+      scene.add(new THREE.Mesh(g, mat.tynk));
+    }
+    // Attic window east gable
+    addWindow(cX + cW/2 + 0.1, cTop + 0.5, cZ, 0.5, 0.4, Math.PI/2);
+    // Two small horizontal attic windows on south wall
+    addWindow(cX - 2, cTop + 0.3, cZ + cD/2 + 0.1, 1.0, 0.35, 0);
+    addWindow(cX + 2, cTop + 0.3, cZ + cD/2 + 0.1, 1.0, 0.35, 0);
+    // Fascia
+    box(cW + 0.8, 0.2, 0.08, mat.tynk, cX, roofLow - 0.1, cZ + cD/2 + 0.4);
+    box(cW + 0.8, 0.2, 0.08, mat.tynk, cX, roofHigh - 0.1, cZ - cD/2 - 0.4);
+  }
+
+// ============== GARAGE BUILDING (18x6m) with ATTIC ==============
+{
+  const gD = 18;
+  const ufW = 6;
+  const gBase = 0.6;
+  const gfH = 2.8;
+  const atticH = 2.4;
+  const gTop = gBase + gfH; // 3.4
+  const aTop = gTop + atticH; // 5.8
+
+  const eastWall = plotE; // 15.5
+  const mainWestWall = eastWall - ufW; // 9.5
+  const garageWestWall = mainWestWall - 1.0; // 8.5
+  const gZ = 22.8;
+  const northWall = gZ - gD/2; // 13.8
+  const southWall = gZ + gD/2; // 31.8
+  const garageEndZ = northWall + 6; // 19.8
+
+  // ── Piętro skrócone o 3.3m ──
+  const atticCut = 3.3;
+  const atticLen = gD - atticCut;                // 14.7m
+  const atticSouthWall = northWall + atticLen;   // 13.8 + 14.7 = 28.5
+  const atticCenterZ = northWall + atticLen / 2; // środek piętra
+
+  // Foundation
+  box(ufW, gBase, gD, mat.fundament, (mainWestWall + eastWall)/2, gBase/2, gZ);
+  box(1.0, gBase, 6, mat.fundament, garageWestWall + 0.5, gBase/2, northWall + 3);
+
+  // Main GF walls (6m wide, full length 18m)
+  box(ufW, gfH, gD, mat.tynk, (mainWestWall + eastWall)/2, gBase + gfH/2, gZ);
+
+  // Garage protrusion (1m extra west, 6m long from north)
+  box(1.0, gfH, 6, mat.tynk, garageWestWall + 0.5, gBase + gfH/2, northWall + 3);
+
+  // Wood cladding on garage protrusion front (west wall)
+  box(0.12, gfH - 0.3, 1.1, mat.drewno, garageWestWall - 0.08, gBase + gfH/2 - 0.15, northWall + 0.55);
+  box(0.12, gfH - 0.3, 1.1, mat.drewno, garageWestWall - 0.08, gBase + gfH/2 - 0.15, northWall + 5.45);
+
+    // Wood cladding on main GF west wall (south of garage protrusion) — SKRÓCONE
+  box(0.12, gfH - 0.3, atticLen - 6 - 0.2, mat.drewno, mainWestWall - 0.06, gBase + gfH/2 - 0.15, garageEndZ + (atticLen - 6)/2);
+
+  // Accent strip at GF top — SKRÓCONE
+  box(0.1, 0.12, 6, mat.accent, garageWestWall - 0.06, gTop - 0.06, northWall + 3);
+  box(0.1, 0.12, atticLen - 6, mat.accent, mainWestWall - 0.06, gTop - 0.06, garageEndZ + (atticLen - 6)/2);
+
+  // GARAGE DOOR — na licu ściany, wysunięta przed okładzinę
+  box(0.2, 2.4, 3.5, mat.accent, garageWestWall - 0.18, gBase + 1.2, northWall + 3.0);
+
+  // Upper floor walls — SKRÓCONE (14.7m zamiast 18m)
+  box(ufW, atticH, atticLen, mat.tynk, (mainWestWall + eastWall)/2, gTop + atticH/2, atticCenterZ);
+
+  // Canopy/daszek — skrócony do długości piętra (14.7m)
+  box(1.0, 0.12, 6 + 0.4, mat.dach, garageWestWall + 0.5, gTop + 0.06, northWall + 3);
+  box(0.4, 0.12, atticLen - 6 + 0.2, mat.dach, mainWestWall - 0.2, gTop + 0.06, garageEndZ + (atticLen - 6)/2);
+  box(0.06, 0.18, atticLen + 0.6, mat.accent, garageWestWall - 0.03, gTop - 0.06, atticCenterZ);
+
+  // Wypełnienie daszka — czarne (płaski panel między belkami)
+  const canopyFillMat = new THREE.MeshLambertMaterial({ color: 0x111111 });
+  // wypełnienie nad garażem (szerszy daszek 1m)
+  box(0.98, 0.02, 6 + 0.3, canopyFillMat, garageWestWall + 0.5, gTop + 0.12, northWall + 3);
+  // wypełnienie nad resztą (węższy daszek 0.4m)
+  box(0.38, 0.02, atticLen - 6 + 0.1, canopyFillMat, mainWestWall - 0.2, gTop + 0.12, garageEndZ + (atticLen - 6)/2);
+  // wypełnienie nad garażem (6m)
+  box(0.9, 0.06, 6 + 0.2, canopyFillMat, garageWestWall + 0.5, gTop + 0.03, northWall + 3);
+  // wypełnienie nad resztą (od garażu do końca skróconego piętra)
+  box(0.3, 0.06, atticLen - 6, canopyFillMat, mainWestWall - 0.15, gTop + 0.03, garageEndZ + (atticLen - 6)/2);
+  // Entrance door GF (south of garage section)
+  box(0.14, 2.1, 0.9, mat.drzwi, mainWestWall - 0.07, gBase + 1.05, garageEndZ + 2);
+
+  // GF windows west wall
+  addWindow(mainWestWall - 0.08, 2.0, garageEndZ + 5, 1.2, 1.0, Math.PI/2);
+  addWindow(mainWestWall - 0.08, 2.0, garageEndZ + 8, 1.2, 1.0, Math.PI/2);
+
+  // Attic windows west wall — landscape (przesunięte na skrócone piętro)
+  const atticMidZ = northWall + atticLen / 2;
+  addWindow(mainWestWall - 0.1, gTop + 1.2, atticMidZ - 5, 1.2, 0.5, Math.PI/2);
+  addWindow(mainWestWall - 0.1, gTop + 1.2, atticMidZ, 1.2, 0.5, Math.PI/2);
+  addWindow(mainWestWall - 0.1, gTop + 1.2, atticMidZ + 5, 1.2, 0.5, Math.PI/2);
+
+  // North wall — attic door, GF window
+  const doorX = (mainWestWall + eastWall) / 2;
+  box(0.9, 2.1, 0.14, mat.drzwi, doorX, gTop + 1.05, northWall - 0.07);
+  addWindow(doorX, 2.0, northWall - 0.08, 1.0, 1.0, 0);
+
+  // South wall — drzwi na piętrze wychodzące na dach jednospadowy
+  const southDoorX = (mainWestWall + eastWall) / 2;
+  box(0.9, 2.1, 0.14, mat.drzwi, southDoorX, gTop + 1.05, atticSouthWall + 0.07);
+
+  // External stairs
+  {
+    const railMat2 = new THREE.MeshLambertMaterial({ color: 0x555555 });
+
+    const stairWidth = 1.0;
+    const stairStep = 0.28;
+    const nSteps = 10;
+    const stairsLen = nSteps * stairStep;
+
+    const stairX = eastWall - stairWidth / 2 - 0.05;
+
+    const platformW = eastWall - doorX + 1.0;
+    const platformD = 1.5;
+    const platformZ = northWall - platformD / 2 - 0.05;
+    box(platformW, 0.12, platformD, mat.taras,
+        doorX + platformW / 2 - 0.5, gTop, platformZ);
+
+    const topZ = northWall - platformD - 0.05;
+    const bottomZ = topZ - stairsLen;
+    const centerZ = topZ - stairsLen / 2;
+
+    for (let i = 0; i < nSteps; i++) {
+      const sz = topZ - i * stairStep - stairStep / 2;
+      const y = gTop - i * (gTop / nSteps);
+      box(stairWidth, 0.04, stairStep - 0.03, railMat2, stairX, y, sz);
+    }
+
+    box(0.04, 1.0, 0.04, railMat2, stairX - stairWidth/2, 0.5, bottomZ);
+    box(0.04, 1.0, 0.04, railMat2, stairX + stairWidth/2, 0.5, bottomZ);
+
+    const railLeftX = doorX - 0.5;
+    const railRightX = stairX - stairWidth / 2;
+    const railW = railRightX - railLeftX;
+    const railCenterX = railLeftX + railW / 2;
+    const railZ = northWall - platformD - 0.05;
+
+    box(railW, 0.04, 0.04, railMat2, railCenterX, gTop + 1.0, railZ);
+    box(0.04, 1.0, 0.04, railMat2, railLeftX, gTop + 0.5, railZ);
+    box(0.04, 1.0, 0.04, railMat2, railRightX, gTop + 0.5, railZ);
+    box(0.04, 0.04, platformD, railMat2, railLeftX, gTop + 1.0, platformZ);
+  }
+
+  // ============== DACH GŁÓWNY — nad skróconym piętrem (14.7m) ==============
+  const roofHigh = aTop + 0.5;
+  const roofLow = aTop + 0.1;
+  {
+    const ov = 0.4;
+    const x1 = mainWestWall - ov, x2 = eastWall + ov;
+    const z1 = northWall - ov, z2 = atticSouthWall + ov; // ← skrócony do piętra
+    const thick = 0.15;
+    const verts = [
+      x1, roofLow, z1, x2, roofHigh, z1,
+      x2, roofHigh, z2, x1, roofLow, z2,
+      x1, roofLow - thick, z1, x2, roofHigh - thick, z1,
+      x2, roofHigh - thick, z2, x1, roofLow - thick, z2,
+    ];
+    const idx = [0,1,2, 0,2,3, 4,6,5, 4,7,6, 0,4,5, 0,5,1, 2,6,7, 2,7,3, 1,5,6, 1,6,2, 0,3,7, 0,7,4];
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    geo.setIndex(idx); geo.computeVertexNormals();
+    const m = new THREE.Mesh(geo, mat.dach);
+    m.castShadow = true; m.receiveShadow = true;
+    scene.add(m);
+  }
+
+  // Gable fills — północny i południowy (nad skróconym piętrem)
+  {
+    // Północny szczyt
+    const nV = [mainWestWall, aTop, northWall+0.01, eastWall, aTop, northWall+0.01, eastWall, roofHigh-0.15, northWall+0.01, mainWestWall, roofLow-0.15, northWall+0.01];
+    const nI = [0,1,2, 0,2,3, 3,2,1, 3,1,0];
+    const nG = new THREE.BufferGeometry();
+    nG.setAttribute('position', new THREE.Float32BufferAttribute(nV, 3));
+    nG.setIndex(nI);
+    nG.computeVertexNormals();
+    scene.add(new THREE.Mesh(nG, mat.tynk));
+
+    // Południowy szczyt piętra (nowa pozycja)
+    const sV = [mainWestWall, aTop, atticSouthWall-0.01, eastWall, aTop, atticSouthWall-0.01, eastWall, roofHigh-0.15, atticSouthWall-0.01, mainWestWall, roofLow-0.15, atticSouthWall-0.01];
+    const sI = [0,2,1, 0,3,2, 3,1,2, 3,0,1];
+    const sG = new THREE.BufferGeometry();
+    sG.setAttribute('position', new THREE.Float32BufferAttribute(sV, 3));
+    sG.setIndex(sI);
+    sG.computeVertexNormals();
+    scene.add(new THREE.Mesh(sG, mat.tynk));
+  }
+
+  // Listwy krawędziowe dachu głównego (skrócone)
+  box(0.08, 0.2, atticLen + 0.8, mat.accent, mainWestWall - 0.4, roofLow - 0.1, atticCenterZ);
+  box(0.08, 0.2, atticLen + 0.8, mat.accent, eastWall + 0.4, roofHigh - 0.1, atticCenterZ);
+
+  // ============== DACH JEDNOSPADOWY — nad odkrytym parterem (3.3m) ==============
+  {
+    const ov = 0.4;
+    const x1 = mainWestWall - ov, x2 = eastWall + ov;
+    const z1 = atticSouthWall - 0.1;           // początek (północ, przy ścianie piętra)
+    const z2 = southWall + ov;                  // koniec (południe)
+    const thick = 0.12;
+
+    // Dach opada z północy (wysoko, przy ścianie piętra) na południe (nisko)
+    const shedHigh = gTop + 0.3;               // góra — tuż nad parterem, przy ścianie piętra
+    const shedLow = gTop + 0.05;               // dół — na południowym końcu
+
+    const verts = [
+      x1, shedHigh, z1, x2, shedHigh, z1,
+      x2, shedLow, z2, x1, shedLow, z2,
+      x1, shedHigh - thick, z1, x2, shedHigh - thick, z1,
+      x2, shedLow - thick, z2, x1, shedLow - thick, z2,
+    ];
+    const idx = [0,1,2, 0,2,3, 4,6,5, 4,7,6, 0,4,5, 0,5,1, 2,6,7, 2,7,3, 1,5,6, 1,6,2, 0,3,7, 0,7,4];
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    geo.setIndex(idx); geo.computeVertexNormals();
+    const m = new THREE.Mesh(geo, mat.dach);
+    m.castShadow = true; m.receiveShadow = true;
+    scene.add(m);
+
+    // Listwy krawędziowe dachu jednospadowego
+    const shedCenterZ = (z1 + z2) / 2;
+    const shedLen = z2 - z1;
+    box(0.08, 0.15, shedLen, mat.accent, x1, (shedHigh + shedLow)/2 - 0.07, shedCenterZ);
+    box(0.08, 0.15, shedLen, mat.accent, x2, (shedHigh + shedLow)/2 - 0.07, shedCenterZ);
+  }
+}
+  // ============== WIATA (3.5x6m) ==============
+  {
+    const garageWestMain = 9.5;
+    const wW = 3.5, wD = 6;
+    const wX = garageWestMain - wW/2;
+    const wZ = 28.8;
+    const roofHigh = 3.1; // north edge
+    const roofLow = 2.7;  // south edge
+    const ov = 0.3;
+
+    box(wW, 0.15, wD, mat.taras, wX, 0.08, wZ);
+
+    // South wall — height = roofLow (matches low edge of roof)
+    box(wW, roofLow, 0.15, mat.tynk, wX, roofLow/2, wZ + wD/2);
+    box(wW - 0.2, 1.4, 0.12, mat.drewno, wX, 0.7, wZ + wD/2 + 0.08);
+
+    // West wall — TRAPEZOID shape following roof slope
+    // Use custom geometry: north edge at roofHigh, south edge at roofLow
+    {
+      const wx = wX - wW/2;
+      const zN = wZ - wD/2;
+      const zS = wZ + wD/2;
+      const v = [
+        wx-0.075, 0, zN, wx+0.075, 0, zN,
+        wx+0.075, 0, zS, wx-0.075, 0, zS,
+        wx-0.075, roofHigh, zN, wx+0.075, roofHigh, zN,
+        wx+0.075, roofLow, zS, wx-0.075, roofLow, zS,
+      ];
+      const i = [
+        0,1,5, 0,5,4, 2,3,7, 2,7,6,
+        4,5,6, 4,6,7,
+        0,3,2, 0,2,1,
+        1,2,6, 1,6,5,
+        0,4,7, 0,7,3,
+      ];
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+      g.setIndex(i); g.computeVertexNormals();
+      const m = new THREE.Mesh(g, mat.tynk);
+      m.castShadow = true; m.receiveShadow = true;
+      scene.add(m);
+    }
+    // Wood cladding on west wall (lower portion)
+    box(0.12, 1.4, wD - 0.2, mat.drewno, wX - wW/2 - 0.08, 0.7, wZ);
+
+    // Posts on open sides
+    const postMat = new THREE.MeshLambertMaterial({ color: 0x555555 });
+    box(0.12, roofHigh, 0.12, postMat, wX + wW/2 - 0.06, roofHigh/2, wZ - wD/2 + 0.06);
+    box(0.12, roofLow, 0.12, postMat, wX + wW/2 - 0.06, roofLow/2, wZ + wD/2 - 0.06);
+
+    // Roof slab
+    {
+      const x1 = wX - wW/2 - ov, x2 = wX + wW/2 + ov;
+      const z1 = wZ - wD/2 - ov, z2 = wZ + wD/2 + ov;
+      const thick = 0.12;
+      const verts = [
+        x1, roofLow, z2, x2, roofLow, z2,
+        x2, roofHigh, z1, x1, roofHigh, z1,
+        x1, roofLow - thick, z2, x2, roofLow - thick, z2,
+        x2, roofHigh - thick, z1, x1, roofHigh - thick, z1,
+      ];
+      const idx = [0,1,2, 0,2,3, 4,6,5, 4,7,6, 0,4,5, 0,5,1, 2,6,7, 2,7,3, 1,5,6, 1,6,2, 0,3,7, 0,7,4];
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+      geo.setIndex(idx); geo.computeVertexNormals();
+      const m = new THREE.Mesh(geo, mat.dach);
+      m.castShadow = true; m.receiveShadow = true;
+      scene.add(m);
+    }
+    box(wW + 0.6, 0.15, 0.06, mat.accent, wX, roofLow - 0.08, wZ + wD/2 + 0.3);
+  }
+}
+// ============== GROUND GRID (subtle) ==============
+const gridHelper = new THREE.GridHelper(100, 100, 0x888888, 0x888888);
+gridHelper.position.set(-1, 0, 11);
+gridHelper.material.opacity = 0.08;
+gridHelper.material.transparent = true;
+scene.add(gridHelper);
+
+// ============== ORBIT CONTROLS (manual) ==============
+let isDragging = false;
+let isPanning = false;
+let prevMouse = { x: 0, y: 0 };
+let spherical = { r: 32, theta: Math.PI/4, phi: Math.PI/4 };
+let target = new THREE.Vector3(0, 3, 2);
+
+function updateCamera() {
+  camera.position.x = target.x + spherical.r * Math.sin(spherical.phi) * Math.sin(spherical.theta);
+  camera.position.y = target.y + spherical.r * Math.cos(spherical.phi);
+  camera.position.z = target.z + spherical.r * Math.sin(spherical.phi) * Math.cos(spherical.theta);
+  camera.lookAt(target);
+}
+updateCamera();
+
+renderer.domElement.addEventListener('mousedown', (e) => {
+  if (e.button === 0) isDragging = true;
+  if (e.button === 2) isPanning = true;
+  prevMouse = { x: e.clientX, y: e.clientY };
+});
+
+renderer.domElement.addEventListener('mousemove', (e) => {
+  const dx = e.clientX - prevMouse.x;
+  const dy = e.clientY - prevMouse.y;
+  if (isDragging) {
+    spherical.theta -= dx * 0.005;
+    spherical.phi = Math.max(0.1, Math.min(Math.PI/2 - 0.05, spherical.phi + dy * 0.005));
+    updateCamera();
+  }
+  if (isPanning) {
+    const right = new THREE.Vector3();
+    const up = new THREE.Vector3(0, 1, 0);
+    camera.getWorldDirection(right);
+    right.cross(up).normalize();
+    target.addScaledVector(right, -dx * 0.02);
+    target.y += dy * 0.02;
+    updateCamera();
+  }
+  prevMouse = { x: e.clientX, y: e.clientY };
+});
+
+window.addEventListener('mouseup', () => { isDragging = false; isPanning = false; });
+renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+
+renderer.domElement.addEventListener('wheel', (e) => {
+  spherical.r = Math.max(8, Math.min(100, spherical.r + e.deltaY * 0.02));
+  updateCamera();
+});
+
+// Touch controls
+let touchDist = 0;
+renderer.domElement.addEventListener('touchstart', (e) => {
+  if (e.touches.length === 1) {
+    isDragging = true;
+    prevMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  }
+  if (e.touches.length === 2) {
+    isDragging = false;
+    touchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+  }
+});
+renderer.domElement.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+  if (e.touches.length === 1 && isDragging) {
+    const dx = e.touches[0].clientX - prevMouse.x;
+    const dy = e.touches[0].clientY - prevMouse.y;
+    spherical.theta -= dx * 0.005;
+    spherical.phi = Math.max(0.1, Math.min(Math.PI/2 - 0.05, spherical.phi + dy * 0.005));
+    updateCamera();
+    prevMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  }
+  if (e.touches.length === 2) {
+    const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+    spherical.r = Math.max(8, Math.min(100, spherical.r - (d - touchDist) * 0.05));
+    touchDist = d;
+    updateCamera();
+  }
+}, { passive: false });
+renderer.domElement.addEventListener('touchend', () => { isDragging = false; });
+
+// Roof variant switching
+function switchRoof(variant) {
+  document.querySelectorAll('.roof-tab').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + variant).classList.add('active');
+  buildExtRoof(variant);
+}
+
+// View presets
+function animateView(theta, phi, r, tx, ty, tz) {
+  document.querySelectorAll('#controls button').forEach(b => b.classList.remove('active'));
+  const steps = 40;
+  const startT = spherical.theta, startP = spherical.phi, startR = spherical.r;
+  const startTX = target.x, startTY = target.y, startTZ = target.z;
+  let step = 0;
+  function tick() {
+    step++;
+    const t = step / steps;
+    const ease = t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2;
+    spherical.theta = startT + (theta - startT) * ease;
+    spherical.phi = startP + (phi - startP) * ease;
+    spherical.r = startR + (r - startR) * ease;
+    target.x = startTX + (tx - startTX) * ease;
+    target.y = startTY + (ty - startTY) * ease;
+    target.z = startTZ + (tz - startTZ) * ease;
+    updateCamera();
+    if (step < steps) requestAnimationFrame(tick);
+  }
+  tick();
+}
+
+function viewSouth() { animateView(Math.PI, 0.4, 28, 0, 3, 2); document.getElementById('btn-s').classList.add('active'); }
+function viewEast() { animateView(Math.PI/2, 0.4, 28, 0, 3, 2); document.getElementById('btn-e').classList.add('active'); }
+function viewNorth() { animateView(0, 0.4, 28, 0, 3, 2); document.getElementById('btn-n').classList.add('active'); }
+function viewWest() { animateView(-Math.PI/2, 0.4, 28, 0, 3, 2); document.getElementById('btn-w').classList.add('active'); }
+function viewTop() { animateView(0, 0.05, 35, 0, 0, 3); document.getElementById('btn-t').classList.add('active'); }
+function viewIso() { animateView(Math.PI/4, Math.PI/4, 32, 0, 3, 2); document.getElementById('btn-i').classList.add('active'); }
+function viewPlot() { animateView(Math.PI/4, 0.15, 75, -1, 0, 11); document.getElementById('btn-p').classList.add('active'); }
+
+// Resize
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// Keyboard movement (arrows + WASD + QE for up/down)
+const keys = {};
+window.addEventListener('keydown', (e) => { keys[e.code] = true; });
+window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+// Render loop
+function animate() {
+  requestAnimationFrame(animate);
+
+  // Keyboard pan — move target relative to camera direction
+  const speed = 0.3;
+  if (keys['ArrowUp'] || keys['KeyW']) {
+    target.x -= Math.sin(spherical.theta) * speed;
+    target.z -= Math.cos(spherical.theta) * speed;
+    updateCamera();
+  }
+  if (keys['ArrowDown'] || keys['KeyS']) {
+    target.x += Math.sin(spherical.theta) * speed;
+    target.z += Math.cos(spherical.theta) * speed;
+    updateCamera();
+  }
+  if (keys['ArrowLeft'] || keys['KeyA']) {
+    target.x -= Math.cos(spherical.theta) * speed;
+    target.z += Math.sin(spherical.theta) * speed;
+    updateCamera();
+  }
+  if (keys['ArrowRight'] || keys['KeyD']) {
+    target.x += Math.cos(spherical.theta) * speed;
+    target.z -= Math.sin(spherical.theta) * speed;
+    updateCamera();
+  }
+  if (keys['KeyQ']) { target.y += speed * 0.5; updateCamera(); }
+  if (keys['KeyE']) { target.y -= speed * 0.5; updateCamera(); }
+
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
