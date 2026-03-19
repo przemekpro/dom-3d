@@ -344,20 +344,47 @@ function buildExtRoof() {
   const ov = 0.5;
   const eave = 4.1;
   const fb = 0.25;
-
-  // Koperta — kalenica po środku
-  const midZ = (4.5 + 9.2) / 2;
   const ridgeY = 4.8;
-  const x1 = -0.2 - ov, x2 = 6.7 + ov;
-  const z1 = 4.5 - ov, z2 = 9.2 + ov;
-  const rx1 = -0.2 + 2.0, rx2 = 6.7 - 2.0;
 
+  // Kalenica prostopadła do ściany domu (N→S)
+  const ridgeX = (-0.2 + 6.7) / 2; // = 3.25 — środek dobudówki
+
+  // Eave corners with overhang
+  const x1 = -0.2 - ov;   // west eave
+  const x2 = 6.7 + ov;    // east eave
+  const z1 = 4.5 - ov;    // north eave (przy domu, z okapem)
+  const z2 = 9.2 + ov;    // south eave
+
+  // Punkt końcowy kalenicy — zostawiamy miejsce na hip (trójkątną połać południową)
+  const ridgeS_z = 9.2 - 2.0; // = 7.2 — 2m od południowej krawędzi
+
+  // Wierzchołki:
+  // 0: SW eave (x1, eave, z2)
+  // 1: SE eave (x2, eave, z2)
+  // 2: NE eave (x2, eave, z1)
+  // 3: NW eave (x1, eave, z1)
+  // 4: Ridge north (ridgeX, ridgeY, z1) — przy ścianie domu
+  // 5: Ridge south (ridgeX, ridgeY, ridgeS_z)
   const verts = [
-    x1, eave, z2, x2, eave, z2,
-    x2, eave, z1, x1, eave, z1,
-    rx1, ridgeY, midZ, rx2, ridgeY, midZ,
+    x1, eave, z2,             // 0: SW
+    x2, eave, z2,             // 1: SE
+    x2, eave, z1,             // 2: NE
+    x1, eave, z1,             // 3: NW
+    ridgeX, ridgeY, z1,       // 4: Ridge N (przy ścianie domu)
+    ridgeX, ridgeY, ridgeS_z, // 5: Ridge S
   ];
-  const idx = [0,1,5, 0,5,4, 1,2,5, 2,3,4, 2,4,5, 3,0,4, 0,3,2, 0,2,1];
+
+  const idx = [
+    // West slope (od kalenicy na zachód)
+    3, 0, 5, 3, 5, 4,
+    // East slope (od kalenicy na wschód)
+    1, 2, 4, 1, 4, 5,
+    // South hip (trójkąt od końca kalenicy na południe)
+    0, 1, 5,
+    // Bottom
+    0, 3, 2, 0, 2, 1,
+  ];
+
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
   geo.setIndex(idx);
@@ -366,12 +393,11 @@ function buildExtRoof() {
   m.castShadow = true; m.receiveShadow = true;
   scene.add(m); extRoofMeshes.push(m);
 
-  // Przybitki
+  // Przybitki (fascia) — na 3 stronach (zachód, wschód, południe). Bez północnej bo jest przy ścianie domu.
   [
-    [extW + ov*2, fb, 0.06, extCX, eave - fb/2, 9.2 + ov],
-    [extW + ov*2, fb, 0.06, extCX, eave - fb/2, 4.5 - ov],
-    [0.06, fb, extD + ov*2, 6.7 + ov, eave - fb/2, extCZ],
-    [0.06, fb, extD + ov*2, -0.2 - ov, eave - fb/2, extCZ],
+    [extW + ov*2, fb, 0.06, extCX, eave - fb/2, z2],     // south
+    [0.06, fb, extD + ov*2, x2, eave - fb/2, extCZ],      // east
+    [0.06, fb, extD + ov*2, x1, eave - fb/2, extCZ],      // west
   ].forEach(p => { const b = box(p[0],p[1],p[2],mat.tynk,p[3],p[4],p[5]); extRoofMeshes.push(b); });
 }
 
