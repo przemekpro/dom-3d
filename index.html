@@ -344,20 +344,45 @@ function buildExtRoof() {
   const ov = 0.5;
   const eave = 4.1;
   const fb = 0.25;
-
-  // Koperta — kalenica po środku
-  const midZ = (4.5 + 9.2) / 2;
   const ridgeY = 4.8;
-  const x1 = -0.2 - ov, x2 = 6.7 + ov;
-  const z1 = 4.5 - ov, z2 = 9.2 + ov;
-  const rx1 = -0.2 + 2.0, rx2 = 6.7 - 2.0;
 
+  // Eave corners with overhang
+  const x1 = -0.2 - ov;   // west eave
+  const x2 = 6.7 + ov;    // east eave
+  const z1 = 4.5;         // north — at house wall, NO overhang north
+  const z2 = 9.2 + ov;    // south eave
+
+  // Ridge points — along house wall (z=4.5), inset from edges
+  const rx1 = -0.2 + 2.0;  // west ridge point
+  const rx2 = 6.7 - 2.0;   // east ridge point
+
+  // Vertices:
+  // 0: SW eave corner
+  // 1: SE eave corner
+  // 2: NE eave/wall corner (at house wall level, eave height)
+  // 3: NW eave/wall corner (at house wall level, eave height)
+  // 4: W ridge point (at house wall, high)
+  // 5: E ridge point (at house wall, high)
   const verts = [
-    x1, eave, z2, x2, eave, z2,
-    x2, eave, z1, x1, eave, z1,
-    rx1, ridgeY, midZ, rx2, ridgeY, midZ,
+    x1, eave, z2,           // 0: SW
+    x2, eave, z2,           // 1: SE
+    x2, eave, z1,           // 2: NE (at house wall)
+    x1, eave, z1,           // 3: NW (at house wall)
+    rx1, ridgeY, z1,        // 4: W ridge (at house wall, high)
+    rx2, ridgeY, z1,        // 5: E ridge (at house wall, high)
   ];
-  const idx = [0,1,5, 0,5,4, 1,2,5, 2,3,4, 2,4,5, 3,0,4, 0,3,2, 0,2,1];
+
+  const idx = [
+    // South slope (main, from ridge down to south eave)
+    0, 1, 5,  0, 5, 4,
+    // East hip (triangle)
+    1, 2, 5,
+    // West hip (triangle)
+    3, 0, 4,
+    // Bottom
+    0, 3, 2,  0, 2, 1,
+  ];
+
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
   geo.setIndex(idx);
@@ -366,13 +391,13 @@ function buildExtRoof() {
   m.castShadow = true; m.receiveShadow = true;
   scene.add(m); extRoofMeshes.push(m);
 
-  // Przybitki
-  [
-    [extW + ov*2, fb, 0.06, extCX, eave - fb/2, 9.2 + ov],
-    [extW + ov*2, fb, 0.06, extCX, eave - fb/2, 4.5 - ov],
-    [0.06, fb, extD + ov*2, 6.7 + ov, eave - fb/2, extCZ],
-    [0.06, fb, extD + ov*2, -0.2 - ov, eave - fb/2, extCZ],
-  ].forEach(p => { const b = box(p[0],p[1],p[2],mat.tynk,p[3],p[4],p[5]); extRoofMeshes.push(b); });
+  // Przybitki (fascia) — south, east, west only (no north — it's at house wall)
+  const bS = box(extW + ov*2, fb, 0.06, mat.tynk, extCX, eave - fb/2, z2);
+  extRoofMeshes.push(bS);
+  const bE = box(0.06, fb, extD + ov, mat.tynk, 6.7 + ov, eave - fb/2, (z1 + z2)/2);
+  extRoofMeshes.push(bE);
+  const bW = box(0.06, fb, extD + ov, mat.tynk, -0.2 - ov, eave - fb/2, (z1 + z2)/2);
+  extRoofMeshes.push(bW);
 }
 
 buildExtRoof();
@@ -494,6 +519,30 @@ box(0.15, 2.1, 1.0, mat.drzwi, gankX + gankW/2 + 0.1, 1.3 + 1.1, gankCZ);
     box(0.035, railH, 0.035, railMat, stairsStartX, 1.3 + railH/2, sz);
     box(0.035, railH * 0.7, 0.035, railMat, stairsStartX + stairsLen/2, 0.65 + railH * 0.35, sz);
   }
+}
+
+// ============== OKAP/OPASKA łącząca dobudówkę z gankiem ==============
+// Płaski daszek/okap biegnący wzdłuż północnej ściany, styl Home Koncept
+{
+  const canopyY = 4.13;      // na wysokości okapów
+  const canopyThick = 0.12;  // grubość
+  const canopyDepth = 0.7;   // jak daleko wystaje na północ od ściany
+
+  // Rozpiętość: od zachodniej krawędzi ganku z okapem do wschodniej krawędzi dobudówki z okapem
+  const canopyWestX = gankX - gankW/2 - 0.4;  // zachodnia krawędź ganku z okapem
+  const canopyEastX = 6.7 + 0.5;               // wschodnia krawędź dobudówki z okapem
+  const canopyLen = canopyEastX - canopyWestX;
+  const canopyCX = (canopyWestX + canopyEastX) / 2;
+  const canopyCZ = -4.5 - canopyDepth / 2;
+
+  // Główna płyta okapu
+  box(canopyLen, canopyThick, canopyDepth, mat.dach, canopyCX, canopyY, canopyCZ);
+
+  // Ciemna listwa krawędziowa na północnej krawędzi
+  box(canopyLen, 0.08, 0.06, mat.accent, canopyCX, canopyY - canopyThick/2 - 0.04, -4.5 - canopyDepth);
+
+  // Soffit (spód okapu) — jaśniejszy panel
+  box(canopyLen, 0.02, canopyDepth - 0.1, mat.tynk, canopyCX, canopyY - canopyThick/2, canopyCZ);
 }
 
 // ============== TERRACE ==============
